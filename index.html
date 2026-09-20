@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DocuBot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e38;
+    --text: #e6e8ec;
+    --muted: #8b93a3;
+    --accent: #6c8cff;
+    --accent-dim: #3a4a8f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .status { font-size: 13px; color: var(--muted); }
+  .layout { flex: 1; display: flex; overflow: hidden; }
+  .sidebar {
+    width: 280px;
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    overflow-y: auto;
+  }
+  .sidebar h2 { font-size: 13px; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  .sidebar button, .sidebar input[type=file] {
+    width: 100%;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .sidebar button:hover { border-color: var(--accent); }
+  #indexInfo { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .chat { flex: 1; display: flex; flex-direction: column; }
+  .messages { flex: 1; overflow-y: auto; padding: 24px; }
+  .msg { max-width: 720px; margin-bottom: 20px; }
+  .msg .role { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .msg .bubble { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; white-space: pre-wrap; line-height: 1.5; }
+  .msg.user .bubble { background: var(--accent-dim); }
+  .passage {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: #10131a;
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .passage b { color: var(--text); }
+  .inputRow { display: flex; padding: 16px 24px; border-top: 1px solid var(--border); gap: 10px; }
+  .inputRow input { flex: 1; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 14px; }
+  .inputRow button { padding: 12px 20px; border-radius: 8px; border: none; background: var(--accent); color: white; font-weight: 600; cursor: pointer; }
+  .inputRow button:disabled { opacity: 0.5; cursor: default; }
+  .empty { color: var(--muted); font-size: 14px; margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📄 DocuBot</h1>
+  <div class="status" id="statusLine">checking status…</div>
+</header>
+
+<div class="layout">
+  <div class="sidebar">
+    <h2>Documents</h2>
+    <button id="loadSamplesBtn">Load sample docs</button>
+    <input type="file" id="fileInput" multiple accept=".txt,.md,.pdf">
+    <button id="uploadBtn">Upload selected files</button>
+    <div id="indexInfo">No documents indexed yet.</div>
+  </div>
+
+  <div class="chat">
+    <div class="messages" id="messages">
+      <div class="empty">Load the sample docs (or upload your own) and ask a question to get started.</div>
+    </div>
+    <div class="inputRow">
+      <input id="questionInput" type="text" placeholder="Ask something about the indexed docs…" />
+      <button id="askBtn">Ask</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const statusLine = document.getElementById('statusLine');
+const indexInfo = document.getElementById('indexInfo');
+const questionInput = document.getElementById('questionInput');
+
+function clearEmptyState() {
+  const empty = messagesEl.querySelector('.empty');
+  if (empty) empty.remove();
+}
+
+function addMessage(role, html) {
+  clearEmptyState();
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = `<div class="role">${role === 'user' ? 'You' : 'DocuBot'}</div><div class="bubble">${html}</div>`;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+async function refreshStatus() {
+  const res = await fetch('/status');
+  const data = await res.json();
+  statusLine.textContent = data.generation_available
+    ? `Claude generation: ON · ${data.chunks_indexed} chunks indexed`
+    : `Retrieval-only mode (no API key) · ${data.chunks_indexed} chunks indexed`;
+  indexInfo.textContent = data.chunks_indexed > 0
+    ? `${data.chunks_indexed} chunks indexed and searchable.`
+    : 'No documents indexed yet.';
+}
+
+document.getElementById('loadSamplesBtn').onclick = async () => {
+  const res = await fetch('/load_samples', { method: 'POST' });
+  const data = await res.json();
+  await refreshStatus();
+  addMessage('assistant', `Loaded sample docs: ${data.chunks_added} chunks added.`);
+};
+
+document.getElementById('uploadBtn').onclick = async () => {
+  const files = document.getElementById('fileInput').files;
+  if (!files.length) { alert('Choose at least one file first.'); return; }
+  const formData = new FormData();
+  for (const f of files) formData.append('files', f);
+  const res = await fetch('/upload', { method: 'POST', body: formData });
+  const data = await res.json();
+  await refreshStatus();
+  addMessage('assistant', `Indexed ${data.files_processed} file(s), ${data.chunks_added} chunks added.` +
+    (data.errors.length ? `<br>Errors: ${data.errors.join(', ')}` : ''));
+};
+
+async function ask() {
+  const q = questionInput.value.trim();
+  if (!q) return;
+  addMessage('user', q);
+  questionInput.value = '';
+  const askBtn = document.getElementById('askBtn');
+  askBtn.disabled = true;
+
+  try {
+    const res = await fetch('/ask?q=' + encodeURIComponent(q));
+    if (!res.ok) {
+      const err = await res.json();
+      addMessage('assistant', 'Error: ' + (err.detail || res.statusText));
+      return;
+    }
+    const data = await res.json();
+    let html = data.answer;
+    for (const p of data.passages) {
+      html += `<div class="passage"><b>${p.source}</b> (chunk ${p.chunk_index}, score ${p.score})<br>${p.text.slice(0, 300)}${p.text.length > 300 ? '…' : ''}</div>`;
+    }
+    addMessage('assistant', html);
+  } finally {
+    askBtn.disabled = false;
+  }
+}
+
+document.getElementById('askBtn').onclick = ask;
+questionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
+
+refreshStatus();
+</script>
+
+</body>
+</html>
